@@ -64,7 +64,7 @@ export async function POST(request: Request) {
 
     const attemptsRef = firestore ? collection(firestore, REG_COLLECTION) : null;
 
-    // Verificar limite de tentativas por IP (best effort).
+    // Verificar limite de tentativas por IP.
     if (attemptsRef) {
       try {
         const today = new Date();
@@ -83,7 +83,11 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: 'Limite de criação de conta por IP atingido. Tente amanhã.' }, { status: 429 });
         }
       } catch (attemptCheckError) {
-        console.warn('Não foi possível validar limite de cadastro por IP. Prosseguindo sem essa validação.', attemptCheckError);
+        console.error('Não foi possível validar limite de cadastro por IP.', attemptCheckError);
+        return NextResponse.json(
+          { error: 'Não foi possível validar o limite de criação de conta. Tente novamente mais tarde.' },
+          { status: 503 }
+        );
       }
     }
 
