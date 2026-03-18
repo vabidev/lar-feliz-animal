@@ -1,10 +1,26 @@
 import { NextResponse } from 'next/server';
-import { initializeFirebase } from '@/firebase';
-import { collection, doc, getDoc, getDocs, query, where, setDoc, Timestamp } from 'firebase/firestore';
-import { getAuth, createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from 'firebase/auth';
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { createUserWithEmailAndPassword, getAuth, sendEmailVerification, updateProfile } from 'firebase/auth';
+import { collection, doc, getDocs, getFirestore, query, setDoc, Timestamp, where } from 'firebase/firestore';
+import { firebaseConfig } from '@/firebase/config';
 
 // Coleção para registrar tentativas por IP
 const REG_COLLECTION = 'registrationAttempts';
+
+export const runtime = 'nodejs';
+
+function getFirebaseServices() {
+  if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
+    return { auth: null, firestore: null };
+  }
+
+  const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+  return {
+    auth: getAuth(app),
+    firestore: getFirestore(app),
+  };
+}
 
 export async function POST(request: Request) {
   try {
@@ -14,26 +30,34 @@ export async function POST(request: Request) {
     }
 
     const ip = request.headers.get('x-forwarded-for')?.split(',')[0].trim() || (request as any).ip || 'unknown';
-    const { firestore, auth } = initializeFirebase();
-    if (!firestore || !auth) {
-      return NextResponse.json({ error: 'Firebase não inicializado.' }, { status: 500 });
+    const { firestore, auth } = getFirebaseServices();
+    if (!auth) {
+      return NextResponse.json({ error: 'Firebase Auth não inicializado.' }, { status: 500 });
     }
 
-    // Verificar se já existe tentativa hoje para este IP
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(today.getDate() + 1);
-    const attemptsRef = collection(firestore, REG_COLLECTION);
-    const q = query(
-      attemptsRef,
-      where('ip', '==', ip),
-      where('createdAt', '>=', Timestamp.fromDate(today)),
-      where('createdAt', '<', Timestamp.fromDate(tomorrow))
-    );
-    const snapshot = await getDocs(q);
-    if (!snapshot.empty) {
-      return NextResponse.json({ error: 'Limite de criação de conta por IP atingido. Tente amanhã.' }, { status: 429 });
+    const attemptsRef = firestore ? collection(firestore, REG_COLLECTION) : null;
+
+    // Verificar limite de tentativas por IP (best effort).
+    if (attemptsRef) {
+      try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today);
+        tomorrow.setDate(today.getDate() + 1);
+
+        const q = query(
+          attemptsRef,
+          where('ip', '==', ip),
+          where('createdAt', '>=', Timestamp.fromDate(today)),
+          where('createdAt', '<', Timestamp.fromDate(tomorrow))
+        );
+        const snapshot = await getDocs(q);
+        if (!snapshot.empty) {
+          return NextResponse.json({ error: 'Limite de criação de conta por IP atingido. Tente amanhã.' }, { status: 429 });
+        }
+      } catch (attemptCheckError) {
+        console.warn('Não foi possível validar limite de cadastro por IP. Prosseguindo sem essa validação.', attemptCheckError);
+      }
     }
 
     const credential = await createUserWithEmailAndPassword(auth, email, password);
@@ -42,13 +66,19 @@ export async function POST(request: Request) {
     const appOrigin = process.env.NEXT_PUBLIC_APP_ORIGIN ?? 'http://localhost:3000';
     await sendEmailVerification(credential.user, { url: `${appOrigin}/verify-email`, handleCodeInApp: true });
 
-    // Registrar tentativa
-    const attemptDoc = doc(attemptsRef);
-    await setDoc(attemptDoc, {
-      ip,
-      uid: credential.user.uid,
-      createdAt: Timestamp.now(),
-    });
+    // Registrar tentativa (best effort).
+    if (attemptsRef) {
+      try {
+        const attemptDoc = doc(attemptsRef);
+        await setDoc(attemptDoc, {
+          ip,
+          uid: credential.user.uid,
+          createdAt: Timestamp.now(),
+        });
+      } catch (attemptSaveError) {
+        console.warn('Não foi possível registrar tentativa de cadastro.', attemptSaveError);
+      }
+    }
 
     return NextResponse.json({ success: true });
   } catch (error: any) {
