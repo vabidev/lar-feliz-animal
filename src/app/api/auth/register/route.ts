@@ -28,7 +28,6 @@ import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } 
  
     const attemptsRef = firestore ? collection(firestore, REG_COLLECTION) : null;
 
-
     // Verificar limite de tentativas por IP (best effort).
     if (attemptsRef) {
       try {
@@ -36,6 +35,21 @@ import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } 
         today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today);
         tomorrow.setDate(today.getDate()
+function getFirebaseServices() {
+  if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
+    return { auth: null, firestore: null };
+  }
+
+  const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+
+  return {
+    auth: getAuth(app),
+    firestore: getFirestore(app),
+  };
+}
+
+export const runtime = 'nodejs';
+
 function getFirebaseServices() {
   if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
     return { auth: null, firestore: null };
@@ -62,9 +76,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Firebase Auth não inicializado.' }, { status: 500 });
     }
 
-    const attemptsRef = firestore ? collection(firestore, REG_COLLECTION) : null;
-
-    // Verificar limite de tentativas por IP.
+    const attemptsRef = firestore ? collection(firestore, REG_COLLECTIO
     if (attemptsRef) {
       try {
         const today = new Date();
@@ -83,6 +95,7 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: 'Limite de criação de conta por IP atingido. Tente amanhã.' }, { status: 429 });
         }
       } catch (attemptCheckError) {
+        console.warn('Não foi possível validar limite de cadastro por IP. Prosseguindo sem essa validação.', attemptCheckError);
         console.error('Não foi possível validar limite de cadastro por IP.', attemptCheckError);
         return NextResponse.json(
           { error: 'Não foi possível validar o limite de criação de conta. Tente novamente mais tarde.' },
