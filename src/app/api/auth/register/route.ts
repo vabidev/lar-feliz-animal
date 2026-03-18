@@ -38,4 +38,96 @@ function getFirebaseServices() {
 
 export async function POST(request: Request) {
   try {
-    const {
+    const { email, password, name } = await request.json();
+
+    if (!email || !password || !name) {
+      return NextResponse.json({ error: 'Parâmetros ausentes.' }, { status: 400 });
+    }
+
+    const ip =
+      request.headers.get('x-forwarded-for')?.split(',')[0].trim() ||
+      (request as any).ip ||
+      'unknown';
+
+    const { firestore, auth } = getFirebaseServices();
+
+    if (!auth) {
+      return NextResponse.json(
+        { error: 'Firebase Auth não inicializado.' },
+        { status: 500 }
+      );
+    }
+
+    const attemptsRef = firestore ? collection(firestore, REG_COLLECTION) : null;
+
+    // Verificar limite de tentativas por IP (best effort).
+    if (attemptsRef) {
+      try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const tomorrow = new Date(today);
+        tomorrow.setDate(today.getDate() + 1);
+
+        const q = query(
+          attemptsRef,
+          where('ip', '==', ip),
+          where('createdAt', '>=', Timestamp.fromDate(today)),
+          where('createdAt', '<', Timestamp.fromDate(tomorrow))
+        );
+
+        const snapshot = await getDocs(q);
+
+        if (!snapshot.empty) {
+          return NextResponse.json(
+            { error: 'Limite de criação de conta por IP atingido. Tente amanhã.' },
+            { status: 429 }
+          );
+        }
+      } catch (attemptCheckError) {
+        console.warn(
+          'Não foi possível validar limite de cadastro por IP. Prosseguindo sem essa validação.',
+          attemptCheckError
+        );
+      }
+    }
+
+    const credential = await createUserWithEmailAndPassword(auth, email, password);
+
+    await updateProfile(credential.user, { displayName: name });
+
+    const appOrigin = process.env.NEXT_PUBLIC_APP_ORIGIN ?? 'http://localhost:3000';
+
+    await sendEmailVerification(credential.user, {
+      url: `${appOrigin}/verify-email`,
+      handleCodeInApp: true,
+    });
+
+    // Registrar tentativa (best effort).
+    if (attemptsRef) {
+      try {
+        const attemptDoc = doc(attemptsRef);
+
+        await setDoc(attemptDoc, {
+          ip,
+          uid: credential.user.uid,
+          createdAt: Timestamp.now(),
+        });
+      } catch (attemptSaveError) {
+        console.warn(
+          'Não foi possível registrar tentativa de cadastro.',
+          attemptSaveError
+        );
+      }
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error('Erro no registro', error);
+
+    return NextResponse.json(
+      { error: error?.message || 'Erro interno.' },
+      { status: 500 }
+    );
+  }
+}
