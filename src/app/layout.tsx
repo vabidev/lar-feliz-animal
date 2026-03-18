@@ -117,17 +117,4 @@ export default function RootLayout({
       </body>
     </html>
   );
-}            <FavoritesProvider>
-              <MotionOrchestrator />
-              <Header />
-              <main className="flex-grow">
-                <PageTransition>{children}</PageTransition>
-              </main>
-              <Footer />
-              <Toaster />
-            </FavoritesProvider>
-          </FirebaseClientProvider>
-        </ThemeProvider>
-      </body>
-    </html>
-  );
+}     
